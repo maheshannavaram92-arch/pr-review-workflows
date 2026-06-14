@@ -23,7 +23,7 @@ on:
         required: false
         default: true
         type: boolean
-      pr_url:                                        # ← ADD THIS
+      pr_url:
         description: "Pull Request URL"
         required: true
         type: string
@@ -50,52 +50,46 @@ jobs:
       - name: Auto Describe
         if: inputs.auto_describe == true
         run: |
+          TOKEN="${{ steps.app-token.outputs.token }}"
           docker run --rm \
-            -e GITHUB_TOKEN="${{ steps.app-token.outputs.token }}" \
-            -e GITHUB_EVENT_NAME="${{ github.event_name }}" \
-            -e GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
-            -e GITHUB_REPOSITORY="${{ github.repository }}" \
+            -e "github.user_token=${TOKEN}" \
+            -e "github.deployment_type=user" \
             -e "OPENAI.KEY=${{ secrets.OPENAI_API_KEY }}" \
             -e "OPENAI.API_TYPE=openai" \
             -e "config.model=gpt-4o" \
             -e "config.temperature=0.2" \
             -e "pr_description.enable_large_pr_handling=true" \
             -e "pr_description.inline_file_summary=true" \
-            -v "${GITHUB_EVENT_PATH}:${GITHUB_EVENT_PATH}" \
             codiumai/pr-agent:latest \
-            --pr_url="${{ inputs.pr_url }}" describe   # ← use inputs.pr_url
+            --pr_url="${{ inputs.pr_url }}" describe
 
       - name: Auto Review
         if: inputs.auto_review == true
         run: |
+          TOKEN="${{ steps.app-token.outputs.token }}"
           docker run --rm \
-            -e GITHUB_TOKEN="${{ steps.app-token.outputs.token }}" \
-            -e GITHUB_EVENT_NAME="${{ github.event_name }}" \
-            -e GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
-            -e GITHUB_REPOSITORY="${{ github.repository }}" \
+            -e "github.user_token=${TOKEN}" \
+            -e "github.deployment_type=user" \
             -e "OPENAI.KEY=${{ secrets.OPENAI_API_KEY }}" \
             -e "OPENAI.API_TYPE=openai" \
             -e "config.model=gpt-4o" \
             -e "config.temperature=0.2" \
-            -v "${GITHUB_EVENT_PATH}:${GITHUB_EVENT_PATH}" \
             codiumai/pr-agent:latest \
-            --pr_url="${{ inputs.pr_url }}" review     # ← use inputs.pr_url
+            --pr_url="${{ inputs.pr_url }}" review
 
       - name: Auto Improve
         if: inputs.auto_improve == true
         run: |
+          TOKEN="${{ steps.app-token.outputs.token }}"
           docker run --rm \
-            -e GITHUB_TOKEN="${{ steps.app-token.outputs.token }}" \
-            -e GITHUB_EVENT_NAME="${{ github.event_name }}" \
-            -e GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
-            -e GITHUB_REPOSITORY="${{ github.repository }}" \
+            -e "github.user_token=${TOKEN}" \
+            -e "github.deployment_type=user" \
             -e "OPENAI.KEY=${{ secrets.OPENAI_API_KEY }}" \
             -e "OPENAI.API_TYPE=openai" \
             -e "config.model=gpt-4o" \
             -e "config.temperature=0.2" \
-            -v "${GITHUB_EVENT_PATH}:${GITHUB_EVENT_PATH}" \
             codiumai/pr-agent:latest \
-            --pr_url="${{ inputs.pr_url }}" improve    # ← use inputs.pr_url
+            --pr_url="${{ inputs.pr_url }}" improve
 
       - name: Feedback Comment
         if: always() && inputs.feedback == true
