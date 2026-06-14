@@ -56,7 +56,8 @@ jobs:
             -e "github.deployment_type=user" \
             -e "OPENAI.KEY=${{ secrets.OPENAI_API_KEY }}" \
             -e "OPENAI.API_TYPE=openai" \
-            -e "config.model=gpt-4o" \
+            -e "config.model=gpt-3.5-turbo" \
+            -e "config.fallback_models=[]" \
             -e "config.temperature=0.2" \
             -e "pr_description.enable_large_pr_handling=true" \
             -e "pr_description.inline_file_summary=true" \
@@ -72,7 +73,8 @@ jobs:
             -e "github.deployment_type=user" \
             -e "OPENAI.KEY=${{ secrets.OPENAI_API_KEY }}" \
             -e "OPENAI.API_TYPE=openai" \
-            -e "config.model=gpt-4o" \
+            -e "config.model=gpt-3.5-turbo" \
+            -e "config.fallback_models=[]" \
             -e "config.temperature=0.2" \
             codiumai/pr-agent:latest \
             --pr_url="${{ inputs.pr_url }}" review
@@ -86,7 +88,8 @@ jobs:
             -e "github.deployment_type=user" \
             -e "OPENAI.KEY=${{ secrets.OPENAI_API_KEY }}" \
             -e "OPENAI.API_TYPE=openai" \
-            -e "config.model=gpt-4o" \
+            -e "config.model=gpt-3.5-turbo" \
+            -e "config.fallback_models=[]" \
             -e "config.temperature=0.2" \
             codiumai/pr-agent:latest \
             --pr_url="${{ inputs.pr_url }}" improve
