@@ -23,23 +23,23 @@ on:
         required: false
         default: true
         type: boolean
+    secrets:                                   # ← ADD THIS BLOCK
+      APP_ID:
+        required: true
+      OPENAI_API_KEY:
+        required: true
+      PR_AGENT_WRAPPER_PRIVATE_KEY:
+        required: true
 
 jobs:
   pr_agent:
     runs-on: ubuntu-latest
     steps:
-      - name: Decode Private Key
-        id: decode
-        run: |
-          echo "${{ secrets.PR_AGENT_WRAPPER_PRIVATE_KEY }}" \
-          | base64 -d | tr '|' '\n' > /tmp/private_key.pem
-          echo "key-path=/tmp/private_key.pem" >> $GITHUB_OUTPUT
-
       - name: Generate GitHub App Token
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
-          app-id: ${{ secrets.APP_ID }}        # add APP_ID as secret too
+          app-id: ${{ secrets.APP_ID }}                          # ← now works
           private-key: ${{ secrets.PR_AGENT_WRAPPER_PRIVATE_KEY }}
           repositories: ${{ github.event.repository.name }}
 
