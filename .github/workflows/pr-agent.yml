@@ -54,8 +54,13 @@ jobs:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           docker run --rm \
+            -e GITHUB_TOKEN="${APP_TOKEN}" \
             -e "github.user_token=${APP_TOKEN}" \
             -e "github.deployment_type=user" \
+            -e GITHUB_EVENT_NAME="${{ github.event_name }}" \
+            -e GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
+            -e GITHUB_REPOSITORY="${{ github.repository }}" \
+            -e GITHUB_ACTION=true \
             -e "GROQ_API_KEY=${GROQ_API_KEY}" \
             -e "OPENAI.API_TYPE=groq" \
             -e "config.model=groq/llama-3.3-70b-versatile" \
@@ -63,8 +68,11 @@ jobs:
             -e "config.temperature=0.2" \
             -e "pr_description.enable_large_pr_handling=true" \
             -e "pr_description.inline_file_summary=true" \
-            codiumai/pr-agent:0.32-github_action \
-            --pr_url="${{ inputs.pr_url }}" describe
+            -e "github_action_config.auto_describe=true" \
+            -e "github_action_config.auto_review=false" \
+            -e "github_action_config.auto_improve=false" \
+            -v "${GITHUB_EVENT_PATH}:${GITHUB_EVENT_PATH}" \
+            codiumai/pr-agent:0.32-github_action
 
       - name: Auto Review
         if: inputs.auto_review == true
@@ -73,15 +81,23 @@ jobs:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           docker run --rm \
+            -e GITHUB_TOKEN="${APP_TOKEN}" \
             -e "github.user_token=${APP_TOKEN}" \
             -e "github.deployment_type=user" \
+            -e GITHUB_EVENT_NAME="${{ github.event_name }}" \
+            -e GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
+            -e GITHUB_REPOSITORY="${{ github.repository }}" \
+            -e GITHUB_ACTION=true \
             -e "GROQ_API_KEY=${GROQ_API_KEY}" \
             -e "OPENAI.API_TYPE=groq" \
             -e "config.model=groq/llama-3.3-70b-versatile" \
             -e "config.fallback_models=[]" \
             -e "config.temperature=0.2" \
-            codiumai/pr-agent:0.32-github_action \
-            --pr_url="${{ inputs.pr_url }}" review
+            -e "github_action_config.auto_describe=false" \
+            -e "github_action_config.auto_review=true" \
+            -e "github_action_config.auto_improve=false" \
+            -v "${GITHUB_EVENT_PATH}:${GITHUB_EVENT_PATH}" \
+            codiumai/pr-agent:0.32-github_action
 
       - name: Auto Improve
         if: inputs.auto_improve == true
@@ -90,15 +106,23 @@ jobs:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           docker run --rm \
+            -e GITHUB_TOKEN="${APP_TOKEN}" \
             -e "github.user_token=${APP_TOKEN}" \
             -e "github.deployment_type=user" \
+            -e GITHUB_EVENT_NAME="${{ github.event_name }}" \
+            -e GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
+            -e GITHUB_REPOSITORY="${{ github.repository }}" \
+            -e GITHUB_ACTION=true \
             -e "GROQ_API_KEY=${GROQ_API_KEY}" \
             -e "OPENAI.API_TYPE=groq" \
             -e "config.model=groq/llama-3.3-70b-versatile" \
             -e "config.fallback_models=[]" \
             -e "config.temperature=0.2" \
-            codiumai/pr-agent:0.32-github_action \
-            --pr_url="${{ inputs.pr_url }}" improve
+            -e "github_action_config.auto_describe=false" \
+            -e "github_action_config.auto_review=false" \
+            -e "github_action_config.auto_improve=true" \
+            -v "${GITHUB_EVENT_PATH}:${GITHUB_EVENT_PATH}" \
+            codiumai/pr-agent:0.32-github_action
 
       - name: Feedback Comment
         if: always() && inputs.feedback == true
