@@ -47,21 +47,16 @@ jobs:
           private-key: ${{ secrets.PR_AGENT_WRAPPER_PRIVATE_KEY }}
           repositories: ${{ github.event.repository.name }}
 
-      - name: Debug Groq Key          # ← ADD HERE
-        run: |
-          echo "GROQ KEY starts with: $(echo '${{ secrets.GROQ_API_KEY }}' | cut -c1-7)"
-          echo "GROQ KEY length: ${#GROQ_KEY}"
-        env:
-          GROQ_KEY: ${{ secrets.GROQ_API_KEY }}
-          
       - name: Auto Describe
         if: inputs.auto_describe == true
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           TOKEN="${{ steps.app-token.outputs.token }}"
           docker run --rm \
             -e "github.user_token=${TOKEN}" \
             -e "github.deployment_type=user" \
-            -e "OPENAI.KEY=${{ secrets.GROQ_API_KEY }}" \
+            -e "OPENAI.KEY=${GROQ_API_KEY}" \
             -e "OPENAI.API_TYPE=groq" \
             -e "config.model=groq/llama-3.3-70b-versatile" \
             -e "config.fallback_models=[]" \
@@ -73,12 +68,14 @@ jobs:
 
       - name: Auto Review
         if: inputs.auto_review == true
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           TOKEN="${{ steps.app-token.outputs.token }}"
           docker run --rm \
             -e "github.user_token=${TOKEN}" \
             -e "github.deployment_type=user" \
-            -e "OPENAI.KEY=${{ secrets.GROQ_API_KEY }}" \
+            -e "OPENAI.KEY=${GROQ_API_KEY}" \
             -e "OPENAI.API_TYPE=groq" \
             -e "config.model=groq/llama-3.3-70b-versatile" \
             -e "config.fallback_models=[]" \
@@ -88,12 +85,14 @@ jobs:
 
       - name: Auto Improve
         if: inputs.auto_improve == true
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           TOKEN="${{ steps.app-token.outputs.token }}"
           docker run --rm \
             -e "github.user_token=${TOKEN}" \
             -e "github.deployment_type=user" \
-            -e "OPENAI.KEY=${{ secrets.GROQ_API_KEY }}" \
+            -e "OPENAI.KEY=${GROQ_API_KEY}" \
             -e "OPENAI.API_TYPE=groq" \
             -e "config.model=groq/llama-3.3-70b-versatile" \
             -e "config.fallback_models=[]" \
