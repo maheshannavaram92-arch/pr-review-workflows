@@ -1,0 +1,63 @@
+name: PR Agent
+
+on:
+  workflow_call:
+    inputs:
+      auto_describe:
+        description: "Enable auto describe"
+        required: false
+        default: true
+        type: boolean
+      auto_improve:
+        description: "Enable auto improve"
+        required: false
+        default: true
+        type: boolean
+      auto_review:
+        description: "Enable auto review"
+        required: false
+        default: true
+        type: boolean
+      feedback:
+        description: "Enable feedback comment"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  pr_agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decode Private Key
+        id: decode
+        run: |
+          echo "${{ secrets.PR_AGENT_WRAPPER_PRIVATE_KEY }}" \
+          | base64 -d | tr '|' '\n' > /tmp/private_key.pem
+          echo "key-path=/tmp/private_key.pem" >> $GITHUB_OUTPUT
+
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}        # add APP_ID as secret too
+          private-key: ${{ secrets.PR_AGENT_WRAPPER_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Run PR Agent
+        run: |
+          docker run --rm \
+            -e GITHUB_TOKEN="${{ steps.app-token.outputs.token }}" \
+            -e GITHUB_EVENT_NAME="${{ github.event_name }}" \
+            -e GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
+            -e GITHUB_REPOSITORY="${{ github.repository }}" \
+            -e "OPENAI.KEY=${{ secrets.OPENAI_API_KEY }}" \
+            -e "OPENAI.API_TYPE=openai" \
+            -e "config.model=gpt-4o" \
+            -e "config.temperature=0.2" \
+            -e "pr_description.enable_large_pr_handling=true" \
+            -e "pr_description.inline_file_summary=true" \
+            -e "github_action_config.auto_describe=${{ inputs.auto_describe }}" \
+            -e "github_action_config.auto_improve=${{ inputs.auto_improve }}" \
+            -e "github_action_config.auto_review=${{ inputs.auto_review }}" \
+            -v "${GITHUB_EVENT_PATH}:${GITHUB_EVENT_PATH}" \
+            codiumai/pr-agent:latest
