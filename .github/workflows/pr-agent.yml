@@ -30,7 +30,7 @@ on:
     secrets:
       APP_ID:
         required: true
-      OPENAI_API_KEY:
+      GROQ_API_KEY:
         required: true
       PR_AGENT_WRAPPER_PRIVATE_KEY:
         required: true
@@ -54,9 +54,9 @@ jobs:
           docker run --rm \
             -e "github.user_token=${TOKEN}" \
             -e "github.deployment_type=user" \
-            -e "OPENAI.KEY=${{ secrets.OPENAI_API_KEY }}" \
-            -e "OPENAI.API_TYPE=openai" \
-            -e "config.model=gpt-3.5-turbo" \
+            -e "OPENAI.KEY=${{ secrets.GROQ_API_KEY }}" \
+            -e "OPENAI.API_TYPE=groq" \
+            -e "config.model=groq/llama-3.3-70b-versatile" \
             -e "config.fallback_models=[]" \
             -e "config.temperature=0.2" \
             -e "pr_description.enable_large_pr_handling=true" \
@@ -71,9 +71,9 @@ jobs:
           docker run --rm \
             -e "github.user_token=${TOKEN}" \
             -e "github.deployment_type=user" \
-            -e "OPENAI.KEY=${{ secrets.OPENAI_API_KEY }}" \
-            -e "OPENAI.API_TYPE=openai" \
-            -e "config.model=gpt-3.5-turbo" \
+            -e "OPENAI.KEY=${{ secrets.GROQ_API_KEY }}" \
+            -e "OPENAI.API_TYPE=groq" \
+            -e "config.model=groq/llama-3.3-70b-versatile" \
             -e "config.fallback_models=[]" \
             -e "config.temperature=0.2" \
             codiumai/pr-agent:latest \
@@ -86,9 +86,9 @@ jobs:
           docker run --rm \
             -e "github.user_token=${TOKEN}" \
             -e "github.deployment_type=user" \
-            -e "OPENAI.KEY=${{ secrets.OPENAI_API_KEY }}" \
-            -e "OPENAI.API_TYPE=openai" \
-            -e "config.model=gpt-3.5-turbo" \
+            -e "OPENAI.KEY=${{ secrets.GROQ_API_KEY }}" \
+            -e "OPENAI.API_TYPE=groq" \
+            -e "config.model=groq/llama-3.3-70b-versatile" \
             -e "config.fallback_models=[]" \
             -e "config.temperature=0.2" \
             codiumai/pr-agent:latest \
