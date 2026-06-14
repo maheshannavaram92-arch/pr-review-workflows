@@ -61,6 +61,7 @@ jobs:
             -e GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
             -e GITHUB_REPOSITORY="${{ github.repository }}" \
             -e GITHUB_ACTION=true \
+            -e OPENAI_KEY="dummy" \
             -e "GROQ_API_KEY=${GROQ_API_KEY}" \
             -e "OPENAI.API_TYPE=groq" \
             -e "config.model=groq/llama-3.3-70b-versatile" \
@@ -88,6 +89,7 @@ jobs:
             -e GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
             -e GITHUB_REPOSITORY="${{ github.repository }}" \
             -e GITHUB_ACTION=true \
+            -e OPENAI_KEY="dummy" \
             -e "GROQ_API_KEY=${GROQ_API_KEY}" \
             -e "OPENAI.API_TYPE=groq" \
             -e "config.model=groq/llama-3.3-70b-versatile" \
@@ -113,6 +115,7 @@ jobs:
             -e GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
             -e GITHUB_REPOSITORY="${{ github.repository }}" \
             -e GITHUB_ACTION=true \
+            -e OPENAI_KEY="dummy" \
             -e "GROQ_API_KEY=${GROQ_API_KEY}" \
             -e "OPENAI.API_TYPE=groq" \
             -e "config.model=groq/llama-3.3-70b-versatile" \
