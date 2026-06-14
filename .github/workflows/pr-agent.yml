@@ -23,6 +23,10 @@ on:
         required: false
         default: true
         type: boolean
+      pr_url:                                        # ← ADD THIS
+        description: "Pull Request URL"
+        required: true
+        type: string
     secrets:
       APP_ID:
         required: true
@@ -59,7 +63,7 @@ jobs:
             -e "pr_description.inline_file_summary=true" \
             -v "${GITHUB_EVENT_PATH}:${GITHUB_EVENT_PATH}" \
             codiumai/pr-agent:latest \
-            --pr_url="${{ github.event.pull_request.html_url }}" describe
+            --pr_url="${{ inputs.pr_url }}" describe   # ← use inputs.pr_url
 
       - name: Auto Review
         if: inputs.auto_review == true
@@ -75,7 +79,7 @@ jobs:
             -e "config.temperature=0.2" \
             -v "${GITHUB_EVENT_PATH}:${GITHUB_EVENT_PATH}" \
             codiumai/pr-agent:latest \
-            --pr_url="${{ github.event.pull_request.html_url }}" review
+            --pr_url="${{ inputs.pr_url }}" review     # ← use inputs.pr_url
 
       - name: Auto Improve
         if: inputs.auto_improve == true
@@ -91,13 +95,13 @@ jobs:
             -e "config.temperature=0.2" \
             -v "${GITHUB_EVENT_PATH}:${GITHUB_EVENT_PATH}" \
             codiumai/pr-agent:latest \
-            --pr_url="${{ github.event.pull_request.html_url }}" improve
+            --pr_url="${{ inputs.pr_url }}" improve    # ← use inputs.pr_url
 
       - name: Feedback Comment
         if: always() && inputs.feedback == true
         uses: actions/github-script@v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}   # ← use app-token NOT GITHUB_TOKEN
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const prNumber = context.payload.pull_request.number;
             const { owner, repo } = context.repo;
