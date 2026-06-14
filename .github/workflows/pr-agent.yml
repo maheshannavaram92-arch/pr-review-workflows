@@ -47,6 +47,13 @@ jobs:
           private-key: ${{ secrets.PR_AGENT_WRAPPER_PRIVATE_KEY }}
           repositories: ${{ github.event.repository.name }}
 
+      - name: Debug Groq Key          # ← ADD HERE
+        run: |
+          echo "GROQ KEY starts with: $(echo '${{ secrets.GROQ_API_KEY }}' | cut -c1-7)"
+          echo "GROQ KEY length: ${#GROQ_KEY}"
+        env:
+          GROQ_KEY: ${{ secrets.GROQ_API_KEY }}
+          
       - name: Auto Describe
         if: inputs.auto_describe == true
         run: |
