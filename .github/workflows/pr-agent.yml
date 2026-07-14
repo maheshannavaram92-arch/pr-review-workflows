@@ -88,8 +88,23 @@ jobs:
             };
 
             // --- 1. Security (weight 30%) ---
-            const secretPatterns    = [/password\s*=/i, /secret\s*=/i, /api[_-]?key\s*=/i, /access[_-]?token\s*=/i, /private[_-]?key/i, /BEGIN (RSA|EC|OPENSSH|PRIVATE)/];
-            const sensitiveFilePat  = [/\.env$/, /\.env\./, /secret/i, /credential/i, /\.pem$/, /\.p12$/, /\.pfx$/, /id_rsa$/, /\.key$/];
+            const secretPatterns = [
+              /password\s*=/i,          // any_password =
+              /[_-]token\s*=/i,         // any_token = (catches Atlassian_token, api_token, etc.)
+              /secret\s*=/i,            // any_secret =
+              /api[_-]?key\s*=/i,       // api_key =
+              /access[_-]?key\s*=/i,    // access_key =
+              /private[_-]?key/i,       // private_key
+              /BEGIN (RSA|EC|OPENSSH|PRIVATE)/,  // PEM block
+              /[a-z0-9]{32,}/,          // long hardcoded strings (tokens/hashes)
+            ];
+            const sensitiveFilePat = [
+              /\.env$/, /\.env\./,      // .env files
+              /secret/i, /credential/i, // secret/credential in name
+              /\.pem$/, /\.p12$/, /\.pfx$/, /id_rsa$/, /\.key$/,  // certs & keys
+              /\.tfvars$/,              // Terraform vars — frequently contain secrets
+              /\.tfvars\.json$/,        // Terraform vars JSON variant
+            ];
             let secHits = 0;
             for (const f of files) {
               if (sensitiveFilePat.some(p => p.test(f.filename))) secHits += 3;
