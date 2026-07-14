@@ -1,27 +1,525 @@
-name: PR Review
+name: PR Agent
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-  pull_request_review_comment:
-    types: [created]
-  issue_comment:
-    types: [created]
+  workflow_call:
+    inputs:
+      auto_describe:
+        description: "Enable auto describe"
+        required: false
+        default: true
+        type: boolean
+      auto_improve:
+        description: "Enable auto improve"
+        required: false
+        default: true
+        type: boolean
+      auto_review:
+        description: "Enable auto review"
+        required: false
+        default: true
+        type: boolean
+      feedback:
+        description: "Enable feedback comment"
+        required: false
+        default: true
+        type: boolean
+      pr_url:
+        description: "Pull Request URL"
+        required: true
+        type: string
+      risk_scorecard:
+        description: "Enable PR risk scorecard and merge gate"
+        required: false
+        default: true
+        type: boolean
+      risk_gate:
+        description: "Block merge when risk meets or exceeds threshold"
+        required: false
+        default: true
+        type: boolean
+      risk_threshold:
+        description: "Risk level that triggers merge block: LOW, MEDIUM, HIGH, or CRITICAL"
+        required: false
+        default: "HIGH"
+        type: string
+      codebase_context:
+        description: "Enable codebase context analysis — compares PR changes against existing repo"
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      APP_ID:
+        required: true
+      GROQ_API_KEY:
+        required: true
+      PR_AGENT_WRAPPER_PRIVATE_KEY:
+        required: true
 
 jobs:
-  pr-agent:
-    uses: maheshannavaram92-arch/pr-review-workflows/.github/workflows/pr-agent.yml@main
-    with:
-      auto_describe: true
-      auto_improve: true
-      auto_review: true
-      feedback: true
-      pr_url: ${{ github.event.pull_request.html_url }}
-      risk_scorecard: true
-      risk_gate: true
-      risk_threshold: HIGH
-      codebase_context: true
-    secrets:
-      APP_ID: ${{ secrets.APP_ID }}
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      PR_AGENT_WRAPPER_PRIVATE_KEY: ${{ secrets.PR_AGENT_WRAPPER_PRIVATE_KEY }}
+  risk_scorecard:
+    if: inputs.risk_scorecard == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.PR_AGENT_WRAPPER_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Analyze PR Risk & Post Scorecard
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const { owner, repo } = context.repo;
+            const sha = context.payload.pull_request.head.sha;
+
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+            const { data: files } = await github.rest.pulls.listFiles({ owner, repo, pull_number: prNumber, per_page: 100 });
+
+            const scoreLabel = (score) => {
+              if (score <= 2) return { label: 'LOW',      emoji: '🟢' };
+              if (score <= 5) return { label: 'MEDIUM',   emoji: '🟡' };
+              if (score <= 7) return { label: 'HIGH',     emoji: '🔴' };
+              return             { label: 'CRITICAL', emoji: '🚨' };
+            };
+
+            // --- 1. Security (weight 30%) ---
+            const secretPatterns    = [/password\s*=/i, /secret\s*=/i, /api[_-]?key\s*=/i, /access[_-]?token\s*=/i, /private[_-]?key/i, /BEGIN (RSA|EC|OPENSSH|PRIVATE)/];
+            const sensitiveFilePat  = [/\.env$/, /\.env\./, /secret/i, /credential/i, /\.pem$/, /\.p12$/, /\.pfx$/, /id_rsa$/, /\.key$/];
+            let secHits = 0;
+            for (const f of files) {
+              if (sensitiveFilePat.some(p => p.test(f.filename))) secHits += 3;
+              if (f.patch) {
+                const addedLines = f.patch.split('\n').filter(l => l.startsWith('+'));
+                for (const line of addedLines)
+                  for (const p of secretPatterns)
+                    if (p.test(line)) secHits++;
+              }
+            }
+            const securityScore  = Math.min(10, secHits * 2);
+            const securityDetail = secHits === 0 ? 'No sensitive patterns detected' : `${secHits} sensitive pattern(s) found — manual audit recommended`;
+
+            // --- 2. Complexity (weight 20%) ---
+            const totalLines = pr.additions + pr.deletions;
+            const totalFiles = pr.changed_files;
+            let complexityScore;
+            if      (totalLines > 1000 || totalFiles > 30) complexityScore = 10;
+            else if (totalLines > 500  || totalFiles > 20) complexityScore = 8;
+            else if (totalLines > 200  || totalFiles > 10) complexityScore = 6;
+            else if (totalLines > 100  || totalFiles > 5)  complexityScore = 4;
+            else if (totalLines > 50   || totalFiles > 2)  complexityScore = 2;
+            else complexityScore = 1;
+            const complexityDetail = `${totalLines.toLocaleString()} lines changed across ${totalFiles} file(s)`;
+
+            // --- 3. Test Coverage Gap (weight 20%) ---
+            const isTest   = f => /\.(test|spec)\.(js|ts|py|go|java|rb|rs|cs)$|__tests__|\/tests?\//.test(f.filename);
+            const isSource = f => /\.(js|ts|py|go|java|rb|rs|cs|cpp|c)$/.test(f.filename) && !isTest(f);
+            const testFiles   = files.filter(isTest);
+            const sourceFiles = files.filter(isSource);
+            let testScore;
+            if (sourceFiles.length === 0) {
+              testScore = 0;
+            } else if (testFiles.length === 0) {
+              testScore = 8;
+            } else {
+              const ratio = testFiles.length / sourceFiles.length;
+              testScore = ratio >= 0.5 ? 1 : ratio >= 0.25 ? 4 : 6;
+            }
+            const testDetail = sourceFiles.length === 0
+              ? 'No source files changed'
+              : `${sourceFiles.length} source file(s), ${testFiles.length} test file(s)`;
+
+            // --- 4. Breaking Changes (weight 20%) ---
+            const breakingFilePat  = [/\/routes?\//i, /\/schema/i, /\/api\//i, /openapi/i, /swagger/i, /\.proto$/];
+            const breakingLinePat  = [/^\-.*export\s+(default\s+)?(function|class|const|interface|type)\s/];
+            let breakHits = 0;
+            for (const f of files) {
+              if (breakingFilePat.some(p => p.test(f.filename))) breakHits += 2;
+              if (f.patch) {
+                const removed = f.patch.split('\n').filter(l => l.startsWith('-'));
+                for (const line of removed)
+                  if (breakingLinePat.some(p => p.test(line))) breakHits++;
+              }
+            }
+            const breakingScore  = Math.min(10, breakHits * 2);
+            const breakingDetail = breakHits === 0 ? 'No API/schema contract changes detected' : `${breakHits} potential breaking change(s) — review exports and routes`;
+
+            // --- 5. Dependency Risk (weight 10%) ---
+            const depPat   = /package\.json$|requirements\.txt$|go\.(mod|sum)$|Gemfile(\.lock)?$|pom\.xml$|build\.gradle$|Cargo\.(toml|lock)$|yarn\.lock$|package-lock\.json$/;
+            const depFiles = files.filter(f => depPat.test(f.filename));
+            const depScore  = Math.min(10, depFiles.length * 3);
+            const depDetail = depFiles.length === 0
+              ? 'No dependency files changed'
+              : `${depFiles.length} file(s) changed: ${depFiles.map(f => f.filename).join(', ')}`;
+
+            // --- Overall Score ---
+            const overallScore = Math.round(
+              securityScore   * 0.30 +
+              complexityScore * 0.20 +
+              testScore       * 0.20 +
+              breakingScore   * 0.20 +
+              depScore        * 0.10
+            );
+            const overall = scoreLabel(overallScore);
+
+            const dimensions = [
+              { name: '🔐 Security',           score: securityScore,   detail: securityDetail   },
+              { name: '🧩 Complexity',          score: complexityScore, detail: complexityDetail  },
+              { name: '🧪 Test Coverage Gap',   score: testScore,       detail: testDetail        },
+              { name: '💥 Breaking Changes',    score: breakingScore,   detail: breakingDetail    },
+              { name: '📦 Dependencies',        score: depScore,        detail: depDetail         },
+            ];
+
+            const threshold   = '${{ inputs.risk_threshold }}';
+            const riskOrder   = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+            const gateEnabled = '${{ inputs.risk_gate }}' === 'true';
+            const blocked     = gateEnabled && riskOrder.indexOf(overall.label) >= riskOrder.indexOf(threshold);
+
+            const gateSection = blocked
+              ? '> ⛔ **Merge blocked.** Overall risk `' + overall.label + '` meets or exceeds the configured threshold `' + threshold + '`. Resolve the flagged findings before merging.'
+              : '> ✅ **Merge gate passed.** Overall risk `' + overall.label + '` is below the configured threshold `' + threshold + '`.';
+
+            const marker = '<!-- pr-risk-scorecard -->';
+            const bodyLines = [
+              marker,
+              '## 🔍 PR Risk Scorecard',
+              '',
+              '| Dimension | Score | Risk Level | Details |',
+              '|-----------|:-----:|:----------:|---------|',
+            ];
+            dimensions.forEach(d => {
+              const { label, emoji } = scoreLabel(d.score);
+              bodyLines.push('| ' + d.name + ' | ' + d.score + '/10 | ' + emoji + ' ' + label + ' | ' + d.detail + ' |');
+            });
+            bodyLines.push(
+              '',
+              '**Overall Risk Score: ' + overallScore + '/10 — ' + overall.emoji + ' ' + overall.label + '**',
+              '',
+              gateSection,
+              '',
+              '<details>',
+              '<summary>ℹ️ How scores are calculated</summary>',
+              '',
+              'Each dimension is scored 0-10 and combined using weighted averages:',
+              '',
+              '| Dimension | Weight | What\'s measured |',
+              '|-----------|:------:|-----------------|',
+              '| 🔐 Security | 30% | Sensitive file names and secret-like patterns in added lines |',
+              '| 🧩 Complexity | 20% | Total lines changed and number of files |',
+              '| 🧪 Test Coverage Gap | 20% | Ratio of test files to source files changed |',
+              '| 💥 Breaking Changes | 20% | Removed exports, modified routes/schemas/APIs |',
+              '| 📦 Dependencies | 10% | Dependency manifest files changed |',
+              '',
+              'Risk levels: 🟢 LOW (0-2) · 🟡 MEDIUM (3-5) · 🔴 HIGH (6-7) · 🚨 CRITICAL (8-10)',
+              '</details>'
+            );
+            const body = bodyLines.join('\n');
+
+            // Upsert scorecard comment
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number: prNumber, per_page: 100 });
+            const existing = comments.find(c => c.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
+            }
+
+            // Commit status (merge gate)
+            await github.rest.repos.createCommitStatus({
+              owner,
+              repo,
+              sha,
+              state: blocked ? 'failure' : 'success',
+              context: 'PR Risk Scorecard',
+              description: `Risk: ${overall.label} (${overallScore}/10)${blocked ? ' — merge blocked' : ' — passed'}`,
+              target_url: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
+            });
+
+            if (blocked) {
+              core.setFailed(`PR Risk Scorecard: merge blocked — ${overall.label} risk (${overallScore}/10)`);
+            }
+
+  codebase_context:
+    if: inputs.codebase_context == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.PR_AGENT_WRAPPER_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 1
+
+      - name: Analyze Repo Context & Post Comment
+        uses: actions/github-script@v7
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { execSync } = require('child_process');
+            const prNumber = context.payload.pull_request.number;
+            const { owner, repo } = context.repo;
+
+            // ── Fetch PR changed files ────────────────────────────────────────
+            const { data: prFiles } = await github.rest.pulls.listFiles({
+              owner, repo, pull_number: prNumber, per_page: 30
+            });
+
+            // ── Collect context for each changed file ─────────────────────────
+            const contextParts = [];
+            for (const f of prFiles.slice(0, 10)) {
+              const filename = f.filename;
+              const status   = f.status;
+              const patch    = (f.patch || '').slice(0, 1500);
+              const dirpath  = filename.includes('/') ? filename.split('/').slice(0, -1).join('/') : '.';
+              const stem     = filename.split('/').pop().replace(/\.[^.]+$/, '');
+
+              // Files in the same directory
+              let related = [];
+              try {
+                const out = execSync(`find "${dirpath}" -maxdepth 1 -type f 2>/dev/null || true`).toString();
+                related = out.trim().split('\n').filter(x => x && x !== filename && x !== './' + filename).slice(0, 8);
+              } catch (_) {}
+
+              // Files that reference this file by name
+              let refs = [];
+              try {
+                const out = execSync(
+                  `grep -rl "${stem}" . --include="*.tf" --include="*.py" --include="*.js" --include="*.ts" --include="*.yaml" --include="*.yml" --include="*.go" --include="*.java" --exclude-dir=".git" 2>/dev/null || true`
+                ).toString();
+                refs = out.trim().split('\n').filter(x => x && x !== `./${filename}` && x !== filename).slice(0, 5);
+              } catch (_) {}
+
+              // Sample of existing file content (modified files only)
+              let existing = '';
+              if (status === 'modified') {
+                try {
+                  existing = execSync(`head -40 "${filename}" 2>/dev/null || true`).toString().slice(0, 800);
+                } catch (_) {}
+              }
+
+              contextParts.push({ filename, status, patch, related, refs, existing });
+            }
+
+            // ── Build LLM prompt ──────────────────────────────────────────────
+            const sections = contextParts.map(c => {
+              const lines = [`### ${c.filename} (${c.status})`];
+              if (c.existing) lines.push('**Existing content (first 40 lines):**\n```\n' + c.existing + '\n```');
+              if (c.patch)    lines.push('**PR changes:**\n```diff\n' + c.patch + '\n```');
+              if (c.related.length) lines.push('**Related files in same directory:** ' + c.related.join(', '));
+              if (c.refs.length)    lines.push('**Referenced by:** ' + c.refs.join(', '));
+              return lines.join('\n');
+            });
+
+            const userContent = ('Analyze this PR against the existing repository:\n\n' + sections.join('\n---\n')).slice(0, 7000);
+            const systemContent = [
+              'You are a senior code reviewer. Compare what the PR changes against what already exists in the repository.',
+              'Be concise and specific. Structure your response with these sections:',
+              '1. **Summary** — one sentence on what this PR does in the context of the repo',
+              '2. **Duplicates** — does the PR add something that already exists elsewhere?',
+              '3. **Impact** — which existing files may be affected by these changes?',
+              '4. **Consistency** — does the PR follow existing patterns and conventions?',
+              '5. **Risks** — anything that looks inconsistent or needs more context?',
+              'Use markdown. Keep response under 350 words. Be direct and actionable.',
+            ].join('\n');
+
+            // ── Call Groq API ─────────────────────────────────────────────────
+            const groqResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Authorization': 'Bearer ' + process.env.GROQ_API_KEY,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                model: 'llama-3.3-70b-versatile',
+                messages: [
+                  { role: 'system', content: systemContent },
+                  { role: 'user',   content: userContent }
+                ],
+                temperature: 0.2,
+                max_tokens: 700
+              })
+            });
+
+            if (!groqResp.ok) {
+              core.setFailed('Groq API error: ' + groqResp.status + ' ' + await groqResp.text());
+              return;
+            }
+
+            const groqData  = await groqResp.json();
+            const analysis  = groqData.choices[0].message.content;
+
+            // ── Build impact table ────────────────────────────────────────────
+            const tableRows = contextParts.map(c => {
+              const refs    = c.refs.length    ? c.refs.map(x => '`' + x + '`').join(', ')             : '—';
+              const related = c.related.length ? c.related.slice(0, 3).map(x => '`' + x + '`').join(', ') : '—';
+              return '| `' + c.filename + '` | ' + c.status + ' | ' + refs + ' | ' + related + ' |';
+            });
+
+            // ── Build comment ─────────────────────────────────────────────────
+            const marker = '<!-- pr-codebase-context -->';
+            const bodyLines = [
+              marker,
+              '## 🧠 Codebase Context Analysis',
+              '',
+              analysis,
+              '',
+              '<details>',
+              '<summary>📂 File Impact Map</summary>',
+              '',
+              '| File | Status | Referenced By | Related Files |',
+              '|------|--------|---------------|---------------|',
+              ...tableRows,
+              '',
+              '</details>',
+            ];
+            const body = bodyLines.join('\n');
+
+            // ── Upsert comment ────────────────────────────────────────────────
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: prNumber, per_page: 100
+            });
+            const prev = comments.find(c => c.body?.includes(marker));
+            if (prev) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: prev.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
+            }
+
+  pr_agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.PR_AGENT_WRAPPER_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Auto Describe
+        if: inputs.auto_describe == true
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          docker run --rm \
+            -e GITHUB_TOKEN="${APP_TOKEN}" \
+            -e "github.user_token=${APP_TOKEN}" \
+            -e "github.deployment_type=user" \
+            -e GITHUB_EVENT_NAME="${{ github.event_name }}" \
+            -e GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
+            -e GITHUB_REPOSITORY="${{ github.repository }}" \
+            -e GITHUB_ACTION=true \
+            -e OPENAI_KEY="dummy" \
+            -e "GROQ_API_KEY=${GROQ_API_KEY}" \
+            -e "OPENAI.API_TYPE=groq" \
+            -e "config.model=groq/llama-3.3-70b-versatile" \
+            -e "config.fallback_models=[]" \
+            -e "config.temperature=0.2" \
+            -e "pr_description.enable_large_pr_handling=true" \
+            -e "pr_description.inline_file_summary=true" \
+            -e "github_action_config.auto_describe=true" \
+            -e "github_action_config.auto_review=false" \
+            -e "github_action_config.auto_improve=false" \
+            -v "${GITHUB_EVENT_PATH}:${GITHUB_EVENT_PATH}" \
+            codiumai/pr-agent:0.32-github_action
+
+      - name: Auto Review
+        if: inputs.auto_review == true
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          docker run --rm \
+            -e GITHUB_TOKEN="${APP_TOKEN}" \
+            -e "github.user_token=${APP_TOKEN}" \
+            -e "github.deployment_type=user" \
+            -e GITHUB_EVENT_NAME="${{ github.event_name }}" \
+            -e GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
+            -e GITHUB_REPOSITORY="${{ github.repository }}" \
+            -e GITHUB_ACTION=true \
+            -e OPENAI_KEY="dummy" \
+            -e "GROQ_API_KEY=${GROQ_API_KEY}" \
+            -e "OPENAI.API_TYPE=groq" \
+            -e "config.model=groq/llama-3.3-70b-versatile" \
+            -e "config.fallback_models=[]" \
+            -e "config.temperature=0.2" \
+            -e "github_action_config.auto_describe=false" \
+            -e "github_action_config.auto_review=true" \
+            -e "github_action_config.auto_improve=false" \
+            -v "${GITHUB_EVENT_PATH}:${GITHUB_EVENT_PATH}" \
+            codiumai/pr-agent:0.32-github_action
+
+      - name: Auto Improve
+        if: inputs.auto_improve == true
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          docker run --rm \
+            -e GITHUB_TOKEN="${APP_TOKEN}" \
+            -e "github.user_token=${APP_TOKEN}" \
+            -e "github.deployment_type=user" \
+            -e GITHUB_EVENT_NAME="${{ github.event_name }}" \
+            -e GITHUB_EVENT_PATH="${GITHUB_EVENT_PATH}" \
+            -e GITHUB_REPOSITORY="${{ github.repository }}" \
+            -e GITHUB_ACTION=true \
+            -e OPENAI_KEY="dummy" \
+            -e "GROQ_API_KEY=${GROQ_API_KEY}" \
+            -e "OPENAI.API_TYPE=groq" \
+            -e "config.model=groq/llama-3.3-70b-versatile" \
+            -e "config.fallback_models=[]" \
+            -e "config.temperature=0.2" \
+            -e "github_action_config.auto_describe=false" \
+            -e "github_action_config.auto_review=false" \
+            -e "github_action_config.auto_improve=true" \
+            -v "${GITHUB_EVENT_PATH}:${GITHUB_EVENT_PATH}" \
+            codiumai/pr-agent:0.32-github_action
+
+      - name: Feedback Comment
+        if: always() && inputs.feedback == true
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const { owner, repo } = context.repo;
+            const marker = "**[pr-agent-feedback]**";
+            const commentBody = `${marker}
+
+            👋 Thanks for using PR Agent!
+
+            You can re-run PR Agent by adding comments on the PR:
+            - \`/review\` to run review
+            - \`/describe\` to update PR description
+            - \`/improve\` to get code suggestions`;
+
+            const existing = await github.rest.issues.listComments({
+              issue_number: prNumber,
+              owner,
+              repo,
+              per_page: 100,
+            });
+
+            const alreadyExists = existing.data.some(c => c.body?.includes(marker));
+            if (!alreadyExists) {
+              await github.rest.issues.createComment({
+                issue_number: prNumber,
+                owner,
+                repo,
+                body: commentBody,
+              });
+            }
