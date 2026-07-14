@@ -293,6 +293,11 @@ jobs:
             });
 
             // ── Collect context for each changed file ─────────────────────────
+            const readFile = (path, lines = 40) => {
+              try { return execSync(`head -${lines} "${path}" 2>/dev/null || true`).toString().slice(0, 900); }
+              catch (_) { return ''; }
+            };
+
             const contextParts = [];
             for (const f of prFiles.slice(0, 10)) {
               const filename = f.filename;
@@ -301,12 +306,19 @@ jobs:
               const dirpath  = filename.includes('/') ? filename.split('/').slice(0, -1).join('/') : '.';
               const stem     = filename.split('/').pop().replace(/\.[^.]+$/, '');
 
-              // Files in the same directory
-              let related = [];
+              // Files in the same directory (names only)
+              let relatedNames = [];
               try {
                 const out = execSync(`find "${dirpath}" -maxdepth 1 -type f 2>/dev/null || true`).toString();
-                related = out.trim().split('\n').filter(x => x && x !== filename && x !== './' + filename).slice(0, 8);
+                relatedNames = out.trim().split('\n')
+                  .filter(x => x && x !== filename && x !== './' + filename).slice(0, 6);
               } catch (_) {}
+
+              // Read content of related files — this is the "what's in the repo" data
+              const relatedContent = relatedNames.slice(0, 3).map(path => ({
+                path,
+                content: readFile(path, 30)
+              })).filter(r => r.content.trim());
 
               // Files that reference this file by name
               let refs = [];
@@ -314,40 +326,67 @@ jobs:
                 const out = execSync(
                   `grep -rl "${stem}" . --include="*.tf" --include="*.py" --include="*.js" --include="*.ts" --include="*.yaml" --include="*.yml" --include="*.go" --include="*.java" --exclude-dir=".git" 2>/dev/null || true`
                 ).toString();
-                refs = out.trim().split('\n').filter(x => x && x !== `./${filename}` && x !== filename).slice(0, 5);
+                refs = out.trim().split('\n')
+                  .filter(x => x && x !== `./${filename}` && x !== filename).slice(0, 5);
               } catch (_) {}
 
-              // Sample of existing file content (modified files only)
-              let existing = '';
+              // For modified files: read current content as "before" baseline
+              let existingContent = '';
               if (status === 'modified') {
-                try {
-                  existing = execSync(`head -40 "${filename}" 2>/dev/null || true`).toString().slice(0, 800);
-                } catch (_) {}
+                existingContent = readFile(filename, 40);
               }
 
-              contextParts.push({ filename, status, patch, related, refs, existing });
+              contextParts.push({ filename, status, patch, relatedNames, relatedContent, refs, existingContent });
             }
 
-            // ── Build LLM prompt ──────────────────────────────────────────────
-            const sections = contextParts.map(c => {
-              const lines = [`### ${c.filename} (${c.status})`];
-              if (c.existing) lines.push('**Existing content (first 40 lines):**\n```\n' + c.existing + '\n```');
-              if (c.patch)    lines.push('**PR changes:**\n```diff\n' + c.patch + '\n```');
-              if (c.related.length) lines.push('**Related files in same directory:** ' + c.related.join(', '));
-              if (c.refs.length)    lines.push('**Referenced by:** ' + c.refs.join(', '));
-              return lines.join('\n');
-            });
+            // ── Build LLM prompt with explicit before/after structure ──────────
+            const repoSection = contextParts.map(c => {
+              const parts = ['=== CHANGED FILE: ' + c.filename + ' (' + c.status + ') ==='];
 
-            const userContent = ('Analyze this PR against the existing repository:\n\n' + sections.join('\n---\n')).slice(0, 7000);
+              // What already exists in the repo
+              parts.push('\n-- WHAT ALREADY EXISTS IN THE REPO --');
+              if (c.existingContent) {
+                parts.push('Current file content (before PR):\n' + c.existingContent);
+              }
+              if (c.relatedContent.length) {
+                parts.push('Existing files in the same directory:');
+                c.relatedContent.forEach(r => {
+                  parts.push('File: ' + r.path + '\n' + r.content);
+                });
+              } else if (c.relatedNames.length) {
+                parts.push('Files in the same directory (contents unavailable): ' + c.relatedNames.join(', '));
+              }
+              if (c.refs.length) {
+                parts.push('Files in the repo that reference this file: ' + c.refs.join(', '));
+              }
+
+              // What the PR is changing
+              parts.push('\n-- WHAT THIS PR ADDS/CHANGES --');
+              if (c.patch) parts.push(c.patch);
+              else parts.push('(new file — no diff available)');
+
+              return parts.join('\n');
+            }).join('\n\n');
+
+            const userContent = repoSection.slice(0, 7500);
             const systemContent = [
-              'You are a senior code reviewer. Compare what the PR changes against what already exists in the repository.',
-              'Be concise and specific. Structure your response with these sections:',
-              '1. **Summary** — one sentence on what this PR does in the context of the repo',
-              '2. **Duplicates** — does the PR add something that already exists elsewhere?',
-              '3. **Impact** — which existing files may be affected by these changes?',
-              '4. **Consistency** — does the PR follow existing patterns and conventions?',
-              '5. **Risks** — anything that looks inconsistent or needs more context?',
-              'Use markdown. Keep response under 350 words. Be direct and actionable.',
+              'You are a senior code reviewer doing a side-by-side comparison.',
+              'You are given: (1) what already exists in the repo, and (2) what the PR is adding or changing.',
+              'Your job is to produce a structured comment with EXACTLY these four sections:',
+              '',
+              '### 📁 What already exists in the repo',
+              'List the relevant existing files and briefly describe what each one does.',
+              '',
+              '### 🔀 What this PR adds or changes',
+              'Describe what the PR introduces, referencing specific file names.',
+              '',
+              '### ⚡ How they compare',
+              'Explicitly compare: overlaps, conflicts, missing variables, inconsistent patterns, or duplicated logic.',
+              '',
+              '### ⚠️ Concerns',
+              'List specific actionable concerns the reviewer should address before merging.',
+              '',
+              'Be direct. Use bullet points. No more than 300 words total.',
             ].join('\n');
 
             // ── Call Groq API ─────────────────────────────────────────────────
@@ -378,8 +417,8 @@ jobs:
 
             // ── Build impact table ────────────────────────────────────────────
             const tableRows = contextParts.map(c => {
-              const refs    = c.refs.length    ? c.refs.map(x => '`' + x + '`').join(', ')             : '—';
-              const related = c.related.length ? c.related.slice(0, 3).map(x => '`' + x + '`').join(', ') : '—';
+              const refs    = c.refs.length         ? c.refs.map(x => '`' + x + '`').join(', ')                   : '—';
+              const related = c.relatedNames.length ? c.relatedNames.slice(0, 3).map(x => '`' + x + '`').join(', ') : '—';
               return '| `' + c.filename + '` | ' + c.status + ' | ' + refs + ' | ' + related + ' |';
             });
 
